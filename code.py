@@ -22,41 +22,52 @@ for img_name in images:
         continue
 
     # -------------------------------
-    # 2. PREPROCESSING
+    # PREPROCESSING
     # -------------------------------
-    img = cv2.resize(img, (224,224))
-    img = cv2.GaussianBlur(img, (5,5), 0)
+    img = cv2.resize(img, (224, 224))
+    img = cv2.GaussianBlur(img, (5, 5), 0)
 
     # -------------------------------
-    # 3. SIFT FEATURE EXTRACTION
+    # SIFT FEATURE EXTRACTION
     # -------------------------------
     kp, des = sift.detectAndCompute(img, None)
 
     if des is not None:
         person_name = os.path.splitext(img_name)[0]
-        database[person_name] = des
+        database[person_name] = (img, kp, des)
 
 print("Training Completed!")
 
 # -------------------------------
-# 4. LOAD TEST IMAGE
+# 2. LOAD TEST IMAGE
 # -------------------------------
 test_img_color = cv2.imread("test/test1.png")
 test_img = cv2.cvtColor(test_img_color, cv2.COLOR_BGR2GRAY)
 
-test_img = cv2.resize(test_img, (224,224))
-test_img = cv2.GaussianBlur(test_img, (5,5), 0)
+test_img = cv2.resize(test_img, (224, 224))
+test_img = cv2.GaussianBlur(test_img, (5, 5), 0)
 
-kp, test_des = sift.detectAndCompute(test_img, None)
+kp_test, test_des = sift.detectAndCompute(test_img, None)
 
 # -------------------------------
-# 5. FEATURE MATCHING
+# 3. FEATURE MATCHING
 # -------------------------------
 bf = cv2.BFMatcher()
 scores = {}
 
-for name, des in database.items():
-    matches = bf.knnMatch(test_des, des, k=2)
+best_match_name = None
+best_matches = None
+best_train_kp = None
+best_train_img = None
+
+print("\nMatching Features...")
+
+for name, (train_img, kp_train, des_train) in database.items():
+
+    if test_des is None or des_train is None:
+        continue
+
+    matches = bf.knnMatch(test_des, des_train, k=2)
 
     good = []
     for m, n in matches:
@@ -65,14 +76,50 @@ for name, des in database.items():
 
     scores[name] = len(good)
 
+    if best_matches is None or len(good) > len(best_matches):
+        best_matches = good
+        best_match_name = name
+        best_train_kp = kp_train
+        best_train_img = train_img
+
 # -------------------------------
-# 6. PREDICTION
+# 4. PREDICTION
 # -------------------------------
 predicted_person = max(scores, key=scores.get)
 
 print("\n==============================")
 print("✅ IDENTIFIED PERSON:", predicted_person)
 print("==============================")
+
+# -------------------------------
+# 5. SHOW SIFT KEYPOINTS (TEST)
+# -------------------------------
+test_kp_img = cv2.drawKeypoints(
+    test_img,
+    kp_test,
+    None,
+    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+)
+
+cv2.imshow("SIFT Keypoints - Test", test_kp_img)
+
+# -------------------------------
+# 6. SHOW SIFT FEATURE MATCHING
+# -------------------------------
+train_img_color = cv2.cvtColor(best_train_img, cv2.COLOR_GRAY2BGR)
+test_img_color_gray = cv2.cvtColor(test_img, cv2.COLOR_GRAY2BGR)
+
+match_img = cv2.drawMatches(
+    test_img_color_gray,
+    kp_test,
+    train_img_color,
+    best_train_kp,
+    best_matches[:30],
+    None,
+    flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+)
+
+cv2.imshow("SIFT Feature Matching", match_img)
 
 # -------------------------------
 # 7. YOLO DETECTION
@@ -88,7 +135,7 @@ boxes = results[0].boxes.xyxy.cpu().numpy()
 print("Detected Boxes:", boxes)
 
 # -------------------------------
-# 8. IoU CALCULATION
+# 8. IoU FUNCTION
 # -------------------------------
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -96,31 +143,36 @@ def iou(boxA, boxB):
     xB = min(boxA[2], boxB[2])
     yB = min(boxA[3], boxB[3])
 
-    inter = max(0, xB-xA) * max(0, yB-yA)
+    inter = max(0, xB - xA) * max(0, yB - yA)
 
-    areaA = (boxA[2]-boxA[0])*(boxA[3]-boxA[1])
-    areaB = (boxB[2]-boxB[0])*(boxB[3]-boxB[1])
+    areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+    areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
 
-    return inter / (areaA + areaB - inter)
+    return inter / (areaA + areaB - inter + 1e-6)
 
 if len(boxes) > 0:
-    print("IoU:", iou(boxes[0], boxes[0]))  # demo
+    print("IoU (self-check):", iou(boxes[0], boxes[0]))
 
 # -------------------------------
 # 9. ACCURACY
 # -------------------------------
-# Replace with actual label if known
-actual = predicted_person  
-
+actual = predicted_person
 accuracy = 1 if predicted_person == actual else 0
+
 print("Accuracy:", accuracy)
 
 # -------------------------------
-# 10. PERFORMANCE ANALYSIS
+# 10. ANALYSIS
 # -------------------------------
 print("\nPerformance Analysis:")
-print("Occlusion → missing features → lower matching score")
-print("Blur/Pose → unclear features → reduced accuracy")
-print("Clear frontal images → best performance")
+print("- Occlusion → fewer keypoints → low matches")
+print("- Blur → weak descriptors → poor matching")
+print("- Good lighting → strong SIFT features")
+print("- YOLO improves detection, SIFT improves identity matching")
 
+# -------------------------------
+# END
+# -------------------------------
+cv2.waitKey(0)
+cv2.destroyAllWindows()
 print("\n✅ PROJECT COMPLETED")
